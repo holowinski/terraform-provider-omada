@@ -48,6 +48,10 @@ type Client struct {
 	// Open API (see openapi.go). Nil when none were configured, in which case
 	// the handful of operations that need it fail with a message saying so.
 	openAPI *openAPIAuth
+
+	// apPortLocks serialises AP port writes per AP (see UpdateAccessPointPort):
+	// MAC -> *sync.Mutex.
+	apPortLocks sync.Map
 }
 
 // APIResponse is the standard envelope returned by every controller endpoint.

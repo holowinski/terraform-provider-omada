@@ -157,6 +157,10 @@ What this provider deliberately does not do, or cannot yet:
 - `omada_vpn` manages only `name` and `enable`, and its write verbs are
   **inferred** rather than confirmed against hardware. Prefer importing an
   existing VPN and toggling `enable`.
+- `omada_access_point_port`'s write is **inferred**: the port's shape was read
+  from a live controller, but the write has not been exercised on hardware.
+  The AP is read back after every write, so a VLAN the controller does not
+  store fails the apply rather than drifting.
 - `omada_iot_beacon` create and delete are **unverified** — they need an access
   point with a BLE radio, which the validation environment does not have.
 

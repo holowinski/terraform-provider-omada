@@ -1656,6 +1656,153 @@ func newMockController(t *testing.T, opts ...mockOption) *httptest.Server {
 		writeEnvelope(w, 0, "", apDoc2G)
 	})
 
+	// An EAP245's one LAN port, as a live 6.3 controller reports it before a
+	// VLAN was ever set: named by lanPort, no id, no localVlanId, and no
+	// entry for the uplink. The AP is in the device list too, so a resource
+	// can tell an AP removed from the site from a failed request.
+	//
+	// Assumed, not observed: a lanPortSettings PATCH carries only the ports
+	// being changed and each is merged into the stored port of that lanPort.
+	// Only the keys the provider sends are accepted, at the top level and in
+	// a port.
+	//
+	// POST /debug/accessPointPorts?down=true|false makes the AP's document
+	// fail; ?ui_vlan=N sets ETH2 as a VLAN set in the UI reads live;
+	// ?drop_port=true takes ETH2 off the AP's port list, ?no_ports=true
+	// leaves it none; ?misc=uplink names ETH2 the uplink in deviceMisc and
+	// drops it from lanVlanPorts; ?serve_unadopted=true keeps serving the
+	// document once the AP has left the device list.
+	devices = append(devices, map[string]any{
+		"name": "AP-2", "type": "ap", "model": "EAP245", "mac": "AC-84-C6-00-00-01",
+		"sn": "227", "ip": "192.168.53.102", "status": 14, "statusCategory": 1,
+		"firmwareVersion": "5.3.3", "version": "5.3.3",
+		"needUpgrade": false, "uptimeLong": 1000, "clientNum": 1, "hwVersion": "3.0",
+	})
+	apPortWrites := map[string]int{}
+	apPortPatches := 0
+	apPortsDown := false
+	apPortsServeUnadopted := false
+	apPortsDoc := map[string]any{
+		"mac": "AC-84-C6-00-00-01", "name": "AP-2",
+		"model": "EAP245", "ip": "192.168.53.102",
+		"lanPortSettings": []any{
+			map[string]any{
+				"lanPort": "ETH2", "portType": float64(0), "supportVlan": true, "localVlanEnable": false,
+				"supportPoe": false, "poeOutEnable": false, "dot1xEnable": false, "mabEnable": false,
+				"tagged": []any{}, "untagged": []any{}, "taggedNetworkId": []any{}, "untaggedNetworkId": []any{},
+				"supportVlanTagged": false, "supportStatusEnable": false, "status": true, "name": "ETH2",
+				"supportBandwidthControl": false, "bandwidthControlEnable": false,
+				"ingressRateLimit": map[string]any{"status": false, "rate": float64(0)},
+				"egressRateLimit":  map[string]any{"status": false, "rate": float64(0)},
+			},
+		},
+		"deviceMisc": map[string]any{
+			"lanPortsNum": float64(1), "lanVlanPorts": []any{"ETH2"}, "uplinkPort": nil, "supportUplinkPortConfig": false,
+		},
+	}
+	apPortsETH2 := func() map[string]any {
+		return apPortsDoc["lanPortSettings"].([]any)[0].(map[string]any)
+	}
+	mux.HandleFunc("/abc123/api/v2/sites/site-1/eaps/AC-84-C6-00-00-01", func(w http.ResponseWriter, r *http.Request) {
+		if !requireToken(w, r) {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		adopted := slices.ContainsFunc(devices, func(d map[string]any) bool { return d["mac"] == "AC-84-C6-00-00-01" })
+		if apPortsDown || (!adopted && !apPortsServeUnadopted) {
+			writeEnvelope(w, -1, "General error", nil)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+		case http.MethodPatch:
+			apPortPatches++
+			var in map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			for k := range in {
+				if k != "lanPortSettings" {
+					writeEnvelope(w, -1001, "unexpected key: "+k, nil)
+					return
+				}
+			}
+			sent, _ := in["lanPortSettings"].([]any)
+			stored := apPortsDoc["lanPortSettings"].([]any)
+			for _, s := range sent {
+				port, _ := s.(map[string]any)
+				for k := range port {
+					switch k {
+					case "id", "lanPort", "localVlanEnable", "localVlanId", "poeOutEnable":
+					default:
+						writeEnvelope(w, -1001, "unexpected key in lanPortSettings: "+k, nil)
+						return
+					}
+				}
+				var target map[string]any
+				for _, p := range stored {
+					if p.(map[string]any)["lanPort"] == port["lanPort"] {
+						target = p.(map[string]any)
+					}
+				}
+				if target == nil {
+					writeEnvelope(w, -1001, "no such port", nil)
+					return
+				}
+				for k, v := range port {
+					if k != "id" {
+						target[k] = v
+					}
+				}
+				name, _ := port["lanPort"].(string)
+				apPortWrites[name]++
+			}
+		default: // PUT, POST
+			writeEnvelope(w, -1600, "Unsupported request path.", nil)
+			return
+		}
+		writeEnvelope(w, 0, "", apPortsDoc)
+	})
+
+	mux.HandleFunc("/debug/accessPointPorts", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Method == http.MethodPost {
+			q := r.URL.Query()
+			if v := q.Get("down"); v != "" {
+				apPortsDown = v == "true"
+			}
+			if q.Get("misc") == "uplink" {
+				apPortsDoc["deviceMisc"] = map[string]any{
+					"lanPortsNum": float64(1), "lanVlanPorts": []any{}, "uplinkPort": "ETH2", "supportUplinkPortConfig": false,
+				}
+			}
+			if q.Get("serve_unadopted") == "true" {
+				apPortsServeUnadopted = true
+			}
+			if q.Get("no_ports") == "true" {
+				apPortsDoc["lanPortSettings"] = []any{}
+			}
+			if q.Get("drop_port") == "true" {
+				apPortsDoc["lanPortSettings"] = []any{map[string]any{"lanPort": "ETH3", "supportVlan": false}}
+			}
+			if v := q.Get("ui_vlan"); v != "" {
+				n, _ := strconv.Atoi(v)
+				eth2 := apPortsETH2()
+				eth2["localVlanEnable"], eth2["localVlanId"], eth2["custom"] = true, float64(n), true
+			}
+			return
+		}
+		writes := map[string]any{}
+		for k, v := range apPortWrites {
+			writes[k] = float64(v)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]map[string]any{
+			"accessPoint": apPortsDoc,
+			"portWrites":  writes,
+			"requests":    {"patch": float64(apPortPatches)},
+		})
+	})
+
 	mux.HandleFunc("/abc123/api/v2/sites/site-1/gateways/F0-09-0D-D0-97-76", func(w http.ResponseWriter, r *http.Request) {
 		if !requireToken(w, r) {
 			return

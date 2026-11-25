@@ -22,7 +22,7 @@ func TestAccDevicesDataSource(t *testing.T) {
 				Config: testProviderConfig(srv.URL) + `data "omada_devices" "test" {}`,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("data.omada_devices.test", "site_id", "site-1"),
-					resource.TestCheckResourceAttr("data.omada_devices.test", "devices.#", "2"),
+					resource.TestCheckResourceAttr("data.omada_devices.test", "devices.#", "3"),
 					resource.TestCheckResourceAttr("data.omada_devices.test", "devices.0.name", "SW-1"),
 					resource.TestCheckResourceAttr("data.omada_devices.test", "devices.0.type", "switch"),
 					resource.TestCheckResourceAttr("data.omada_devices.test", "devices.0.model", "ES205GP"),

@@ -384,6 +384,7 @@ preserved via read-modify-write.
 | `omada_static_route` | CRUD | live | update is `PUT` (`PATCH` → `-1600`) |
 | `omada_portal` | CRUD | live · subset | write-only `password`; bare-array list; PATCH RMW |
 | `omada_vpn` | CRUD | **read live, writes inferred** | see §5.2 |
+| `omada_access_point_port` | R/U (adopt-only) | **read live, writes inferred** | one AP LAN port's VLAN; see §5.5 |
 | `omada_mac_filter` | R/U (singleton) | live | master toggle only; entries live elsewhere |
 | `omada_attack_defense` | R/U (singleton) | live · subset | flood defense / packet anomaly / IP options; update is `PUT` |
 | `omada_ips_whitelist` | C/R/D | live | read at `/grid/`, write one level up; no update verb |
@@ -637,7 +638,7 @@ Every configuration endpoint found on the controller, and where it stands.
 | `/setting/iot/radio` | ✅ `omada_iot_radio` — **Open API only** |
 | `/setting/iot/devices/config` | ⚠️ `omada_iot_beacon` — create/delete unverified (§5.1) |
 | `/setting/iot/servers` | ✅ `omada_iot_server` |
-| per-device configuration | ⚠️ `omada_switch_port`, `omada_switch`, `omada_gateway`, `omada_access_point` (§5.5) |
+| per-device configuration | ⚠️ `omada_switch_port`, `omada_switch`, `omada_gateway`, `omada_access_point`, `omada_access_point_port` (write inferred) (§5.5) |
 
 Not found despite looking, and so presumably unsupported on this hardware or
 named unlike anything tried: DMZ, port triggering, multi-nets NAT, switch-side
@@ -968,10 +969,52 @@ id to `null`, and writing the id back returned `errorCode 0` without restoring
 it — so `mvlanEnable` is refused unless `mvlanNetworkId` is set in the same
 body. That is the sharpest illustration of why the allow-list rule above exists.
 
+**An AP's Ethernet ports are in the same device document**, as
+`lanPortSettings[]`. Read live (6.3.0.111, two EAP245s): each entry is named
+by `lanPort` (`ETH2`) and has no `id`; the uplink is not listed at all;
+`localVlanId` is absent until a VLAN has been set. A port set to a VLAN by id
+in the UI reads `localVlanEnable: true, localVlanId: 20, custom: true`, with
+`taggedNetworkId` and `untaggedNetworkId` empty — the EAP245 reports
+`supportVlanTagged: false`, so binding a port to a network profile is for
+other models and not modelled.
+
+`omada_access_point_port` writes one port through the same
+`PATCH /sites/{site}/eaps/{mac}`, as `{"lanPortSettings": [<that port>]}` carrying
+`id` (the port's name), `lanPort`, `localVlanEnable`, `localVlanId` and, if
+the port reports it, `poeOutEnable` as read. **That body is inferred**: it is
+the one MarkGodwin/tplink-omada-api sends, and it has not been written to real
+hardware from this provider. So is the assumption that it merges into the one
+port named rather than replacing the entry or the list. Hence, as the AP's own
+`channel` already answered success without applying, the AP is read back after
+the write: a VLAN that was not stored, or any other port setting that moved on
+any port, is an error. That proves what the controller stored, not that the AP
+applied it. Writes to one AP's ports are serialised from the first read to the
+read-back, so Terraform's parallel apply of two ports does not see one write
+as the other's moved setting.
+
+The uplink must never be written: its VLAN is the AP's management traffic, and
+an AP that loses the controller is a site visit. The EAP245 does not list it,
+so the check fails closed: a port is written only if its own `supportVlan` is
+true **and** `deviceMisc.lanVlanPorts` lists it **and**
+`deviceMisc.supportUplinkPortConfig` is `false` (an AP whose uplink can be
+chosen may have it on a listed port nothing marks), and it is refused if its
+`uplinkPort` or `logicUplinkPort` is present and not `false` (the names other
+clients and the Open API use; not seen live) or `deviceMisc.uplinkPort` names
+it. An AP that lacks `lanVlanPorts`, or does not send
+`supportUplinkPortConfig: false`, has no port this resource writes, and every
+write is refused if `deviceMisc.uplinkPort` is neither null nor a string, or
+`lanVlanPorts` is not a list of strings. Reads fold the same facts into
+`uplink` and `support_vlan`, so state shows what a write would refuse. An AP
+that lists no ports at all, as a disconnected or upgrading one may, keeps the
+port in state as last read, with a warning, rather than failing every plan,
+unless the AP has left the site.
+
 Still to do: the rest of the switch port document — PoE, per-port QoS, storm
 control, spanning tree — none of which appear in the UI capture, so each needs
 its own capture before anything is written. On APs, `ssidOverrides` and
-`mgtSsidSetting` are likewise unmapped.
+`mgtSsidSetting` are likewise unmapped, and of an AP port only its VLAN by id
+is modelled: binding it to a network profile and tagged VLANs (on models that
+support them), PoE and rate limits are not.
 
 Supporting reads already available:
 `GET /api/v2/sites/{site}/setting/lan/profileSummary` (port profiles as

@@ -3,12 +3,12 @@
 page_title: "omada_port_group Resource - omada"
 subcategory: ""
 description: |-
-  Manages a reusable port group on the Omada controller (Settings → Profiles → Groups). Reference it from a firewall ACL by setting the rule's source_type/destination_type to 2 and putting this group's id in the matching *_ids list.
+  Manages a reusable port group on the Omada controller (Settings → Profiles → Groups), which the UI calls an IP-Port Group. Reference it from a firewall ACL by setting the rule's source_type/destination_type to 2 and putting this group's id in the matching *_ids list. With ip_list set, it matches only those addresses on its ports, so one rule can name both a host and a port.
 ---
 
 # omada_port_group (Resource)
 
-Manages a reusable port group on the Omada controller (Settings → Profiles → Groups). Reference it from a firewall ACL by setting the rule's `source_type`/`destination_type` to `2` and putting this group's `id` in the matching `*_ids` list.
+Manages a reusable port group on the Omada controller (Settings → Profiles → Groups), which the UI calls an IP-Port Group. Reference it from a firewall ACL by setting the rule's `source_type`/`destination_type` to `2` and putting this group's `id` in the matching `*_ids` list. With `ip_list` set, it matches only those addresses on its ports, so one rule can name both a host and a port.
 
 ## Example Usage
 
@@ -18,6 +18,14 @@ Manages a reusable port group on the Omada controller (Settings → Profiles →
 resource "omada_port_group" "web" {
   name  = "web-ports"
   ports = ["80", "443", "8080-8090"]
+}
+
+# An IP-Port Group: the ports on these addresses only. A firewall ACL with it
+# as destination matches one host on one port.
+resource "omada_port_group" "web_server" {
+  name    = "web-server-https"
+  ip_list = [{ ip = "10.10.10.5", mask = 32, description = "web server" }]
+  ports   = ["443"]
 }
 ```
 
@@ -31,6 +39,7 @@ resource "omada_port_group" "web" {
 
 ### Optional
 
+- `ip_list` (Attributes List) IPv4 CIDR entries the group's ports apply to. Empty (the default): the ports on any address. (see [below for nested schema](#nestedatt--ip_list))
 - `port_type` (Number) Port matching type (controller default `0`).
 - `site` (String) Site name. Defaults to the primary site. Changing this forces replacement.
 
@@ -38,6 +47,18 @@ resource "omada_port_group" "web" {
 
 - `id` (String) Controller-assigned group ID.
 - `site_id` (String) Resolved site ID.
+
+<a id="nestedatt--ip_list"></a>
+### Nested Schema for `ip_list`
+
+Required:
+
+- `ip` (String) Network address, e.g. `10.10.10.5`.
+- `mask` (Number) Prefix length (1-32).
+
+Optional:
+
+- `description` (String) Optional per-entry description.
 
 ## Import
 

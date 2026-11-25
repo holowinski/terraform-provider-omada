@@ -16,25 +16,30 @@ const portGroupType = 1
 // source_type/destination_type = 2). Verified against a live v6.2 controller
 // (/setting/profiles/groups, type=1). The ID field is groupId; entries in
 // PortList are single ports ("8080") or ranges ("9000-9100").
+//
+// The UI calls this an "IP-Port Group": IPList narrows it to those addresses
+// on those ports. Left empty, it matches the ports on any address. IPList's
+// entries have the IP group's shape (verified on a live v6.3 controller).
 type PortGroup struct {
-	GroupID      string   `json:"groupId"`
-	Name         string   `json:"name"`
-	Type         int      `json:"type"`
-	PortType     int      `json:"portType"`
-	PortList     []string `json:"portList"`
-	PortMaskList []any    `json:"portMaskList"`
+	GroupID      string         `json:"groupId"`
+	Name         string         `json:"name"`
+	Type         int            `json:"type"`
+	IPList       []IPGroupEntry `json:"ipList"`
+	PortType     int            `json:"portType"`
+	PortList     []string       `json:"portList"`
+	PortMaskList []any          `json:"portMaskList"`
 }
 
-// PortGroupInput is the create/update payload. ipList is sent empty — the
-// controller rejects a type-1 group create without the (empty) ipList field.
+// PortGroupInput is the create/update payload. ipList is always sent, empty
+// when unset — the controller rejects a type-1 group create without it.
 type PortGroupInput struct {
-	GroupID      string   `json:"groupId,omitempty"`
-	Name         string   `json:"name"`
-	Type         int      `json:"type"`
-	IPList       []any    `json:"ipList"`
-	PortType     int      `json:"portType"`
-	PortList     []string `json:"portList"`
-	PortMaskList []any    `json:"portMaskList"`
+	GroupID      string         `json:"groupId,omitempty"`
+	Name         string         `json:"name"`
+	Type         int            `json:"type"`
+	IPList       []IPGroupEntry `json:"ipList"`
+	PortType     int            `json:"portType"`
+	PortList     []string       `json:"portList"`
+	PortMaskList []any          `json:"portMaskList"`
 }
 
 // ListPortGroups returns all port-type groups for a site.
@@ -70,7 +75,7 @@ func (c *Client) GetPortGroup(ctx context.Context, siteID, groupID string) (*Por
 func (c *Client) CreatePortGroup(ctx context.Context, siteID string, in *PortGroupInput) (*PortGroup, error) {
 	in.Type = portGroupType
 	if in.IPList == nil {
-		in.IPList = []any{}
+		in.IPList = []IPGroupEntry{}
 	}
 	if in.PortMaskList == nil {
 		in.PortMaskList = []any{}
@@ -98,7 +103,7 @@ func (c *Client) UpdatePortGroup(ctx context.Context, siteID, groupID string, in
 	in.Type = portGroupType
 	in.GroupID = groupID
 	if in.IPList == nil {
-		in.IPList = []any{}
+		in.IPList = []IPGroupEntry{}
 	}
 	if in.PortMaskList == nil {
 		in.PortMaskList = []any{}

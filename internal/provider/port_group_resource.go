@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -37,6 +40,7 @@ type portGroupResourceModel struct {
 	Site     types.String `tfsdk:"site"`
 	SiteID   types.String `tfsdk:"site_id"`
 	Name     types.String `tfsdk:"name"`
+	IPList   types.List   `tfsdk:"ip_list"`
 	PortType types.Int64  `tfsdk:"port_type"`
 	Ports    types.List   `tfsdk:"ports"`
 }
@@ -47,8 +51,9 @@ func (r *portGroupResource) Metadata(_ context.Context, req resource.MetadataReq
 
 func (r *portGroupResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a reusable port group on the Omada controller (Settings → Profiles → Groups). " +
-			"Reference it from a firewall ACL by setting the rule's `source_type`/`destination_type` to `2` and putting this group's `id` in the matching `*_ids` list.",
+		MarkdownDescription: "Manages a reusable port group on the Omada controller (Settings → Profiles → Groups), which the UI calls an IP-Port Group. " +
+			"Reference it from a firewall ACL by setting the rule's `source_type`/`destination_type` to `2` and putting this group's `id` in the matching `*_ids` list. " +
+			"With `ip_list` set, it matches only those addresses on its ports, so one rule can name both a host and a port.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "Controller-assigned group ID.",
@@ -68,6 +73,22 @@ func (r *portGroupResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Group name.",
 				Required:            true,
+			},
+			"ip_list": schema.ListNestedAttribute{
+				MarkdownDescription: "IPv4 CIDR entries the group's ports apply to. Empty (the default): the ports on any address.",
+				Optional:            true,
+				Computed:            true,
+				Default:             listdefault.StaticValue(types.ListValueMust(ipGroupEntryObjType, []attr.Value{})),
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"ip":   schema.StringAttribute{Required: true, MarkdownDescription: "Network address, e.g. `10.10.10.5`."},
+						"mask": schema.Int64Attribute{Required: true, MarkdownDescription: "Prefix length (1-32)."},
+						"description": schema.StringAttribute{
+							Optional: true, Computed: true, MarkdownDescription: "Optional per-entry description.",
+							Default: stringdefault.StaticString(""),
+						},
+					},
+				},
 			},
 			"port_type": schema.Int64Attribute{
 				MarkdownDescription: "Port matching type (controller default `0`).",
@@ -105,8 +126,17 @@ func (r *portGroupResource) siteName(m portGroupResourceModel) string {
 
 func (r *portGroupResource) inputFrom(ctx context.Context, m portGroupResourceModel) (*omada.PortGroupInput, diag.Diagnostics) {
 	ports, diags := stringSlice(ctx, m.Ports)
+	var entries []ipGroupEntryModel
+	diags.Append(m.IPList.ElementsAs(ctx, &entries, false)...)
+	ips := make([]omada.IPGroupEntry, 0, len(entries))
+	for _, e := range entries {
+		ips = append(ips, omada.IPGroupEntry{
+			IP: e.IP.ValueString(), Mask: int(e.Mask.ValueInt64()), Description: e.Description.ValueString(),
+		})
+	}
 	return &omada.PortGroupInput{
 		Name:     m.Name.ValueString(),
+		IPList:   ips,
 		PortType: int(m.PortType.ValueInt64()),
 		PortList: nilToEmpty(ports),
 	}, diags
@@ -118,6 +148,15 @@ func (r *portGroupResource) apply(ctx context.Context, g *omada.PortGroup, m *po
 	m.PortType = types.Int64Value(int64(g.PortType))
 	list, diags := stringListValue(ctx, g.PortList)
 	m.Ports = list
+	entries := make([]ipGroupEntryModel, 0, len(g.IPList))
+	for _, e := range g.IPList {
+		entries = append(entries, ipGroupEntryModel{
+			IP: types.StringValue(e.IP), Mask: types.Int64Value(int64(e.Mask)), Description: types.StringValue(e.Description),
+		})
+	}
+	ips, d := types.ListValueFrom(ctx, ipGroupEntryObjType, entries)
+	diags.Append(d...)
+	m.IPList = ips
 	return diags
 }
 
